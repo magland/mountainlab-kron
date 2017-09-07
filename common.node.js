@@ -6,6 +6,7 @@ var fs=require('fs');
 var path=require('path');
 var child_process=require('child_process');
 
+/*
 var config=JSON.parse(fs.readFileSync(__dirname+'/../settings/mountainlab.default.json','utf8'));
 try {
 	var config_user_json=fs.readFileSync(__dirname+'/../settings/mountainlab.user.json','utf8');
@@ -19,6 +20,7 @@ catch(err) {
 		process.exit(-1);
 	}
 }
+*/
 
 exports.read_pipelines_from_text_file=function(file_path) {
 	var pipelines=[];
@@ -162,11 +164,13 @@ exports.find_dataset=function(datasets,dsname) {
 };
 
 function find_absolute_dataset_folder_path(folder,text_file_path) {
-	var dataset_paths=config.kron.dataset_paths;
+	//var dataset_paths=config.kron.dataset_paths;
+	var dataset_paths=[];
 	if (text_file_path)
 		dataset_paths.push(text_file_path);
 	for (var i in dataset_paths) {
-		var p=resolve_from_mountainlab(dataset_paths[i]+'/'+folder);
+		//var p=resolve_from_mountainlab(dataset_paths[i]+'/'+folder);
+		var p=dataset_paths[i]+'/'+folder;
 		if (fs.existsSync(p)) {
 			return p;
 		}
@@ -175,11 +179,13 @@ function find_absolute_dataset_folder_path(folder,text_file_path) {
 }
 
 function find_absolute_pipeline_script_path(script_path,text_file_path) {
-	var pipeline_paths=config.kron.pipeline_paths;
+	//var pipeline_paths=config.kron.pipeline_paths;
+	var pipeline_paths=[__dirname+'/../mountainlab/packages'];
 	if (text_file_path)
 		pipeline_paths.push(text_file_path);
 	for (var i in pipeline_paths) {
-		var p=resolve_recursively_from_mountainlab(pipeline_paths[i],script_path);
+		//var p=resolve_recursively_from_mountainlab(pipeline_paths[i],script_path);
+		var p=find_recursively(pipeline_paths[i],script_path);
 		if (fs.existsSync(p)) {
 			return p;
 		}
@@ -188,9 +194,11 @@ function find_absolute_pipeline_script_path(script_path,text_file_path) {
 }
 
 exports.find_view_program_file=function(program_name) {
-	var view_program_paths=config.kron.view_program_paths;
+	//var view_program_paths=config.kron.view_program_paths;
+	var view_program_paths=[__dirname+'/view_programs'];
 	for (var i in view_program_paths) {
-		var p=resolve_from_mountainlab(view_program_paths[i]+'/'+program_name);
+		//var p=resolve_from_mountainlab(view_program_paths[i]+'/'+program_name);
+		var p=view_program_paths[i]+'/'+program_name;
 		if (fs.existsSync(p)) {
 			return p;
 		}
