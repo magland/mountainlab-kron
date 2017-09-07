@@ -1,0 +1,314 @@
+#!/usr/bin/env nodejs
+
+var child_process=require('child_process');
+
+function print_usage() {
+	console.log ('kron-run [pipeline_names] [dataset_names] --outpath=[output(default)] [--output-to-dataset-folder] [--_iff=intermediate_file_folder] [--_return]');
+}
+
+var fs=require('fs');
+var common=require(__dirname+'/common.node.js');
+
+var CLP=new common.CLParams(process.argv);
+
+var pipnames=CLP.unnamedParameters[0];
+var dsnames=CLP.unnamedParameters[1];
+var outpath=CLP.namedParameters.outpath||'output';
+var return_immediately=('_return' in CLP.namedParameters);
+var output_to_dataset_folder=('output-to-dataset-folder' in CLP.namedParameters);
+var pipelines_path='pipelines.txt';
+var datasets_path='datasets.txt';
+
+if (!output_to_dataset_folder)
+	common.mkdir_safe(outpath);
+
+var interface=common.get_interface(); //for now it is hard-coded for spike sorting
+
+var arg1=CLP.unnamedParameters[0]||'';
+if (ends_with(arg1,'.json')) {
+	var json=JSON.parse(common.read_text_file(arg1));
+	if (!json.dataset) {
+		console.error('Missing object: dataset');
+		process.exit(-1);
+	}
+	if (!json.pipeline) {
+		console.error('Missing object: pipeline');
+		process.exit(-1);
+	}
+	if (!json.pipeline.script) {
+		console.error('Missing object: pipeline.script');
+		process.exit(-1);
+	}
+	if (!json.dataset.raw) {
+		console.error('Missing object: dataset.raw');
+		process.exit(-1);
+	}
+	var outpath0=get_output_directory(json.pipeline.name,json.dataset.name);
+	common.mkdir_safe(outpath0);
+	var wpath=outpath0+'/working';
+	common.mkdir_safe(wpath);
+	common.write_text_file(wpath+'/raw.mda.prv',JSON.stringify(json.dataset.raw,null,'\t'));
+	if (json.dataset.params) {
+		common.write_text_file(wpath+'/params.json',JSON.stringify(json.dataset.params||{},null,'\t'));
+	}
+	if (json.dataset.geom) {
+		common.write_text_file(wpath+'/geom.csv',JSON.stringify(json.dataset.geom.csv||'',null,'\t'));
+	}
+	if (json.pipeline.script.content) {
+		common.write_text_file(wpath+'/tmp.pipeline',json.pipeline.script.content);
+	}
+	var absolute_curation_script_path='';
+	if (json.pipeline.curation_script) {
+		absolute_curation_script_path=wpath+'/curation.script';
+		common.write_text_file(absolute_curation_script_path,json.pipeline.curation_script.content||'');
+	}
+	var pipeline={
+		name:json.pipeline.name,
+		absolute_script_path:wpath+'/tmp.pipeline',
+		absolute_curation_script_path:absolute_curation_script_path,
+		arguments:json.pipeline.arguments
+	};
+	var dataset={
+		name:json.dataset.name,
+		absolute_folder_path:wpath,
+		arguments:json.dataset.arguments||{}
+	};
+	run_pipeline(pipeline,dataset,function() {
+		//done
+	});
+}
+else {
+	if ((!pipnames)||(!dsnames)||(!outpath)||(!pipelines_path)||(!datasets_path)) {
+		print_usage();
+		process.exit(-1);
+	}
+	var pipelines=common.read_pipelines_from_text_file(pipelines_path);
+	var datasets=common.read_datasets_from_text_file(datasets_path);
+
+	check_pipelines(pipnames);
+	check_datasets(dsnames);
+
+	common.foreach(pipelines,{},function(p,obj,cb1) {
+		if (common.contains_pipeline(pipnames,pipelines[p])) {
+			common.foreach(datasets,{},function(d,obj,cb2) {
+				if (common.contains_ds(dsnames,datasets[d])) {
+					run_pipeline(pipelines[p],datasets[d],function() {
+						cb2();
+					});
+				}
+				else cb2();
+			},function() {
+				cb1();
+			});
+		}
+		else cb1();
+	},function() {
+		//done
+	});
+}
+
+/*
+common.wait_for_system_calls_to_finish(function() {
+
+});
+*/
+
+function print_error(str) {
+	if (return_immediately) {
+		var obj={
+			error:str
+		};
+		console.log(JSON.stringify(obj));
+	}
+	else {
+		console.log(str);
+	}
+}
+
+function valid_pipeline(name) {
+	if (name=='all') return true;
+	for (var i in pipelines) {
+		if (pipelines[i].name==name) return true;
+	}
+	return false;
+}
+
+function valid_dataset(name) {
+	if (name=='all') return true;
+	for (var i in datasets) {
+		if (datasets[i].name==name) return true;
+	}
+	return false;
+}
+
+function check_pipelines(pipnames) {
+	var vals=pipnames.split(',');
+	for (var i in vals) {
+		if (!valid_pipeline(vals[i])) {
+			print_error('Unable to find pipeline: '+vals[i]);
+			process.exit(-1);	
+		}
+	}
+}
+
+function check_datasets(dsnames) {
+	var vals=dsnames.split(',');
+	for (var i in vals) {
+		if (!valid_dataset(vals[i])) {
+			print_error('Unable to find dataset: '+vals[i]);
+			process.exit(-1);	
+		}
+	}
+}
+
+function get_output_directory(pipeline_name,dataset_name) {
+	return outpath+'/'+pipeline_name+'--'+dataset_name;
+}
+
+function run_pipeline(pipeline,dataset,callback) {
+	var ds_folder=dataset.absolute_folder_path;
+	var pipeline_script_path=pipeline.absolute_script_path;
+
+	var outpath0=get_output_directory(pipeline.name,dataset.name);
+	if (output_to_dataset_folder) {
+		common.mkdir_safe(ds_folder+'/output');
+		outpath0=ds_folder+'/output/'+pipeline.name;
+	}
+	common.mkdir_safe(outpath0);
+
+	if (!ds_folder) {
+		print_error('Unable to find dataset: '+ds_folder);
+		process.exit(-1);
+	}
+	if (!pipeline_script_path) {
+		print_error('Unable to find pipeline: '+pipeline_script_path);
+		process.exit(-1);
+	}
+
+	//args+=' --raw='+ds_folder+'/raw.mda.prv';
+	//var geom_fname=ds_folder+'/geom.csv';
+	//if (fs.existsSync(geom_fname)) {
+	//	args+=' --geom='+geom_fname;
+	//}
+
+	var cmd='mountainprocess';
+	var args='';
+	if (return_immediately)
+		args+='queue-script';
+	else
+		args+='run-script';
+	args+=' '+pipeline_script_path;
+	
+	args+=' '+ds_folder+'/params.json';
+	for (var pname in interface.parameters) {
+		var val=get_interface_parameter_value(interface.parameters[pname]);
+		if (fs.existsSync(val)) {
+			args+=' --'+pname+'='+val;
+		}
+	}
+
+	var params00={};
+	for (var key in dataset.dataset_params) {
+		params00[key]=dataset.dataset_params[key];
+	}
+	for (var key in pipeline.pipeline_params) {
+		params00[key]=pipeline.pipeline_params[key];
+	}
+	for (var key in params00) {
+		args+=' --'+key+'='+params00[key];
+	}
+
+	console.log('+++++++++++++++++++++++++++++++++++++++++++');
+	console.log(JSON.stringify(dataset));
+	console.log(JSON.stringify(pipeline));
+
+	/*
+	{
+		var arguments0=dataset.arguments;
+		for (var i in arguments0) {
+			args+=' '+arguments0[i];
+		}
+	}
+	{
+		var arguments0=pipeline.arguments;
+		for (var i in arguments0) {
+			args+=' '+arguments0[i];
+		}
+	}
+	*/
+
+	if ('_force_run' in CLP.namedParameters) {
+		args+=' --_force_run';
+	}
+	if ('_preserve_tempdir' in CLP.namedParameters) {
+		args+=' --_preserve_tempdir';
+	}
+	if ('_nodaemon' in CLP.namedParameters) {
+		args+=' --_nodaemon';
+	}
+	//if (return_immediately) {
+	//	args+=' --_detach';
+	//}
+	if ('_prvgui' in CLP.namedParameters) {
+		args+=' --_prvgui';	
+	}
+	if ('_intermediate_file_folder' in CLP.namedParameters) {
+		args+=' --_intermediate_file_folder='+CLP.namedParameters['_intermediate_file_folder'];;	
+	}
+	if ('_iff' in CLP.namedParameters) {
+		args+=' --_iff='+CLP.namedParameters['_iff'];;	
+	}
+	args+=' --outpath='+outpath0;
+	args+=' --_script_output='+outpath0+'/pipeline_output.json';
+
+	console.log('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$');
+	console.log(JSON.stringify(args));
+
+	args=args.split(' ');
+	if (return_immediately) {
+		var script_id=make_random_id(10);
+		args.push('--_pript_id='+script_id);
+		var pp=child_process.spawn(cmd,args,{detached: true});
+		pp.unref();
+		var obj={
+			script_id:script_id,
+			command:cmd+' '+args.join(' ')
+		};
+		console.log(JSON.stringify(obj));
+		process.exit(0);
+	}
+	else {
+		console.log ('Running '+cmd+' '+args.join(' '));
+		common.make_system_call(cmd,args,function() {
+			if (pipeline.absolute_curation_script_path) {
+				common.copy_file_sync(pipeline.absolute_curation_script_path,outpath0+'/curation.script');
+			}
+			if (callback) callback();
+		});
+	}	
+
+	function get_interface_parameter_value(val) {
+		val=str_replace(val,'$dataset_folder$',ds_folder);
+		return val;
+	}
+}
+
+function str_replace(str,str1,str2) {
+	return str.split(str1).join(str2);
+}
+
+function make_random_id(len)
+{
+    var text = "";
+    var possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+    for( var i=0; i < len; i++ )
+        text += possible.charAt(Math.floor(Math.random() * possible.length));
+
+    return text;
+}
+
+function ends_with(str,suf) {
+	if (str.length<suf.length) return false;
+	return (str.slice(str.length-suf.length)==suf);
+}

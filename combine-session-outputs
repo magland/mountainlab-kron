@@ -1,0 +1,136 @@
+#!/usr/bin/env nodejs
+
+var fs=require('fs');
+
+function usage() {
+	console.log('Usage: combine-session-outputs [pipeline name] [dataset name] [combined output name] [session1] [session2] ...');
+}
+
+var CLP=new CLParams(process.argv);
+var pipeline_name=CLP.unnamedParameters[0]||'';
+var dataset_name=CLP.unnamedParameters[1]||'';
+var output_name=CLP.unnamedParameters[2]||'';
+var session_names=[];
+for (var ii=3; ii<CLP.unnamedParameters.length; ii++) {
+	session_names.push(CLP.unnamedParameters[ii]);
+}
+if ((!pipeline_name)||(!dataset_name)||(!output_name)||(session_names.length==0)) {
+	usage();
+	return;
+}
+
+var path_out='output/'+pipeline_name+'--'+dataset_name+'/'+output_name;
+mkdir_if_needed(path_out);
+
+var timeseries_list=[];
+var firings_list=[];
+for (var i in session_names) {
+	var path='output/'+pipeline_name+'--'+dataset_name+'/'+session_names[i];
+	if (i==0) copy_file(path+'/cluster_metrics.json',path_out+'/cluster_metrics.json');
+	timeseries_list.push(path+'/raw.mda.prv');
+	firings_list.push(path+'/firings.mda');
+}
+var timeseries_out=path_out+'/raw.mda';
+var firings_out=path_out+'/firings.mda';
+
+mp_process('mountainsort.concat_firings',
+	{timeseries_list:timeseries_list,firings_list:firings_list},
+	{timeseries_out:timeseries_out,firings_out:firings_out},function() {
+		//done
+	});
+
+
+function mp_process(processor_name,inputs,outputs,callback) {
+	var exe='mp-run-process';
+	var args=[processor_name];
+	var all_params={};
+	for (var key in inputs)
+		all_params[key]=inputs[key];
+	for (var key in outputs)
+		all_params[key]=outputs[key];
+	for (var key in all_params) {
+		if (typeof(all_params[key])=='object') {
+			var list0=all_params[key];
+			for (var j in list0) {
+				args.push('--'+key+'='+list0[j]);
+			}
+		}
+		else {
+			args.push('--'+key+'='+all_params[key]);
+		}
+	}
+	run_process_and_read_stdout(exe,args,function() {
+		callback();
+	});
+}
+
+function CLParams(argv) {
+	this.unnamedParameters=[];
+	this.namedParameters={};
+
+	var args=argv.slice(2);
+	for (var i=0; i<args.length; i++) {
+		var arg0=args[i];
+		if (arg0.indexOf('--')===0) {
+			arg0=arg0.slice(2);
+			var ind=arg0.indexOf('=');
+			if (ind>=0) {
+				this.namedParameters[arg0.slice(0,ind)]=arg0.slice(ind+1);
+			}
+			else {
+				this.namedParameters[arg0]=args[i+1]||'';
+				i++;
+			}
+		}
+		else if (arg0.indexOf('-')===0) {
+			arg0=arg0.slice(1);
+			this.namedParameters[arg0]='';
+		}
+		else {
+			this.unnamedParameters.push(arg0);
+		}
+	}
+}
+
+function mkdir_if_needed(path) {
+	var fs=require('fs');
+	if (!fs.existsSync(path)){
+    	fs.mkdirSync(path);
+	}
+}
+
+function string_ends_with(str,str2) {
+	if (str2.length>str.length) return false;
+	return (str.slice(str.length-str2.length)==str2);
+}
+
+function string_contains(str,str2) {
+	var ind=str.indexOf(str2);
+	return (ind>=0);
+}
+
+function run_process_and_read_stdout(exe,args,callback) {
+	console.log ('RUNNING:'+exe+' '+args.join(' '));
+	var P=require('child_process').spawn(exe,args);
+	var txt='';
+	P.stdout.on('data',function(chunk) {
+		txt+=chunk;
+	});
+	P.on('close',function(code) {
+		callback(txt);
+	});
+}
+
+function directory_is_empty(path) {
+	var list=fs.readdirSync(path);
+	return (list.length==0);
+}
+
+function copy_file(src,dst,callback) {
+	var rs=fs.createReadStream(src);
+	var ws=fs.createWriteStream(dst);
+	ws.on("close", function(ex) {
+	    if (callback) callback();
+	});
+	rs.pipe(ws);
+};

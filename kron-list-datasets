@@ -1,0 +1,15 @@
+#!/usr/bin/env nodejs
+
+var fs=require('fs');
+var common=require(__dirname+'/common.node.js');
+
+var CLP=new common.CLParams(process.argv);
+
+var datasets_path='datasets.txt';
+var datasets=common.read_datasets_from_text_file(datasets_path);
+
+for (var i in datasets) {
+	var DS=datasets[i];
+	console.log(DS.name+': '+DS.absolute_folder_path+'  '+JSON.stringify(DS.dataset_params));
+}
+
